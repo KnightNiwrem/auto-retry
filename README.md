@@ -13,7 +13,7 @@ It will then intercept the error, wait the specified period of time, and then re
 import { autoRetry } from "@grammyjs/auto-retry";
 
 // Install the plugin
-bot.api.config.use(autoRetry());
+bot.api.transform(autoRetry());
 ```
 
 You can also pass an options object to configure this plugin.
