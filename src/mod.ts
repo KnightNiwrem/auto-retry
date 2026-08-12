@@ -1,10 +1,7 @@
-import {
-    type AbortSignal,
-    debug as d,
-    HttpError,
-    type Transformer,
-} from "./platform.deno.ts";
-const debug = d("grammy:auto-retry");
+import { createDebug } from "@grammyjs/debug";
+import { HttpError } from "@grammyjs/grammy";
+import type { TransformerFn } from "@grammyjs/grammy";
+const debug = createDebug("grammy:auto-retry");
 
 const ONE_HOUR = 3600; // seconds
 const INITIAL_LAST_DELAY = 3; // seconds
@@ -102,7 +99,7 @@ export interface AutoRetryOptions {
  * @param options Configuration options
  * @returns The created API transformer function
  */
-export function autoRetry(options?: Partial<AutoRetryOptions>): Transformer {
+export function autoRetry(options?: Partial<AutoRetryOptions>): TransformerFn {
     const maxDelay = options?.maxDelaySeconds ?? Infinity;
     const maxRetries = options?.maxRetryAttempts ?? Infinity;
     const rethrowInternalServerErrors = options?.rethrowInternalServerErrors ??
@@ -110,7 +107,7 @@ export function autoRetry(options?: Partial<AutoRetryOptions>): Transformer {
     const rethrowHttpErrors = options?.rethrowHttpErrors ?? false;
     const rethrowChatMigrationErrors = options?.rethrowChatMigrationErrors ??
         false;
-    return async (prev, method, payload, signal) => {
+    return async (prev, data, signal) => {
         let remainingAttempts = maxRetries;
         let nextDelay = INITIAL_LAST_DELAY;
 
@@ -123,14 +120,14 @@ export function autoRetry(options?: Partial<AutoRetryOptions>): Transformer {
             let res: ReturnType<typeof prev> | undefined = undefined;
             while (res === undefined) {
                 try {
-                    res = await prev(method, payload, signal);
+                    res = await prev(data, signal);
                 } catch (e) {
                     if (
                         (signal === undefined || !signal.aborted) &&
                         !rethrowHttpErrors && e instanceof HttpError
                     ) {
                         debug(
-                            `HttpError thrown, will retry '${method}' after ${nextDelay} seconds (${e.message})`,
+                            `HttpError thrown, will retry '${data.method}' after ${nextDelay} seconds (${e.message})`,
                         );
                         await backoff();
                         continue;
@@ -152,23 +149,27 @@ export function autoRetry(options?: Partial<AutoRetryOptions>): Transformer {
                 result.parameters.retry_after <= maxDelay
             ) {
                 debug(
-                    `Hit rate limit, will retry '${method}' after ${result.parameters.retry_after} seconds`,
+                    `Hit rate limit, will retry '${data.method}' after ${result.parameters.retry_after} seconds`,
                 );
                 await pause(result.parameters.retry_after, signal);
                 nextDelay = INITIAL_LAST_DELAY;
                 retry = true;
             } else if (
                 typeof result.parameters?.migrate_to_chat_id === "number" &&
-                typeof payload === "object" && payload !== null &&
-                "chat_id" in payload && typeof payload.chat_id === "number" &&
+                typeof data.payload === "object" && data.payload !== null &&
+                "chat_id" in data.payload &&
+                typeof data.payload.chat_id === "number" &&
                 !rethrowChatMigrationErrors
             ) {
                 debug(
-                    `Hit chat migration error from chat_id ${payload.chat_id} to ${result.parameters.migrate_to_chat_id}, will retry '${method}' immediately with new chat_id`,
+                    `Hit chat migration error from chat_id ${data.payload.chat_id} to ${result.parameters.migrate_to_chat_id}, will retry '${data.method}' immediately with new chat_id`,
                 );
-                payload = {
-                    ...payload,
-                    chat_id: result.parameters.migrate_to_chat_id,
+                data = {
+                    ...data,
+                    payload: {
+                        ...data.payload,
+                        chat_id: result.parameters.migrate_to_chat_id,
+                    },
                 };
                 nextDelay = INITIAL_LAST_DELAY;
                 retry = true;
@@ -177,7 +178,7 @@ export function autoRetry(options?: Partial<AutoRetryOptions>): Transformer {
                 !rethrowInternalServerErrors
             ) {
                 debug(
-                    `Hit internal server error, will retry '${method}' after ${nextDelay} seconds`,
+                    `Hit internal server error, will retry '${data.method}' after ${nextDelay} seconds`,
                 );
                 await backoff();
                 retry = true;
